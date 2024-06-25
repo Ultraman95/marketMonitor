@@ -12,11 +12,14 @@ from datetime import datetime
 from vnqdptd import TdApi as QTdApi
 from vnatptd import TdApi as ATdApi
 
+#qdp持仓
 gp_dict = {}
-monitor_ary = []
+#atp持仓
+ap_dict = {}
 
 isQdpQry = False
 isAtpQry = False
+kill_processName = ""
 
 config = configparser.ConfigParser()
 
@@ -110,6 +113,8 @@ class QdpTdApi(QTdApi):
 
     ##查询持仓
     def qryInvestorPosition(self)->None:
+        isQdpQry = False
+        gp_dict.clear()
         if self.login_status:
             print('QDP执行QryInvestorPosition查询')
             req: dict = {
@@ -120,6 +125,19 @@ class QdpTdApi(QTdApi):
             self.reqid += 1
             self.reqQryInvestorPosition(req, self.reqid)
 
+    ##查询订单
+    def qryOrder(self)->None:
+        if self.login_status:
+            print('QDP执行QryOrder查询')
+            req: dict = {
+                "BrokerID": self.brokerid,
+                "InvestorID": self.investorid,
+                "UserID": self.userid
+            }
+            self.reqid += 1
+            self.reqQryOrder(req, self.reqid)
+
+
     ##查询持仓回调
     def onRspQryInvestorPosition(self, data: dict, error: dict, reqid: int, last: bool)->None:
         print('##QDP onRspQryInvestorPosition##')
@@ -128,13 +146,36 @@ class QdpTdApi(QTdApi):
             print('QDP onRspQryInvestorPosition failed', error)
             return
         if data:
-            if data['InstrumentID'] in monitor_ary:
-                print('Position=',data['Position'])
-                gp_dict[data['InstrumentID']] = gp_dict.get(data['InstrumentID'], {})
-                gp_dict[data['InstrumentID']]['QPosition'] = data['Position']
+            print(f"InstrumentID= {data['InstrumentID']} , Direction= {data['Direction']} , Position= {data['Position']}")
+            gp_dict[data['InstrumentID']] = gp_dict.get(data['InstrumentID'], {})
+            gp_dict[data['InstrumentID']]['QPosition'] = data['Position']
+            if last:
                 isQdpQry = True
         else:
             print("The data dictionary is empty.")
+
+
+    def onRspQryOrder(self, data: dict, error: dict, reqid: int, last: bool)->None:
+        if error["ErrorID"]:
+            print('QDP onRspQryOrder failed', error)
+            return
+        if data:
+            if data['OrderStatus'] != '0' and data['OrderStatus'] != '5':
+                print("QDP rspOrder=",data)
+                qdp_req: dict = {
+                    "BrokerID": self.brokerid,
+                    "InvestorID": self.investorid,
+                    "UserID": self.userid,
+                    "ActionFlag": '0',
+                    "InstrumentID":data['InstrumentID'],
+                    "ExchangeID":'APEX',
+                    "OrderSysID":data['OrderSysID'],
+                    "UserOrderLocalID":data['UserOrderLocalID']
+                }
+                print('QDP reqOrderAction 撤单, ', qdp_req)
+                self.reqid += 1
+                self.reqOrderAction(qdp_req, self.reqid) 
+
 
     def close(self):
         """
@@ -192,6 +233,8 @@ class AtpTdApi(ATdApi):
         
     ##查询持仓
     def qryInvestorPosition(self)->None:
+        isAtpQry = False
+        ap_dict.clear()
         if self.login_status:
             print('ATP执行QryInvestorPosition查询')
             req: dict = {
@@ -200,6 +243,17 @@ class AtpTdApi(ATdApi):
             }
             self.reqid += 1
             self.reqQryInvestorPosition(req, self.reqid)
+
+    ##查询订单
+    def qryOrder(self)->None:
+        if self.login_status:
+            print('ATP执行QryOrder查询')
+            req: dict = {
+                "BrokerID": self.brokerid,
+                "InvestorID": self.userid
+            }
+            self.reqid += 1
+            self.reqQryOrder(req, self.reqid)
 
 
     def qryTradingAccount(self)->None:
@@ -229,7 +283,8 @@ class AtpTdApi(ATdApi):
         ##data对应CThostFtdcRspUserLoginField, error对应CThostFtdcRspInfoField
         if not error["ErrorID"]:
             print('ATP OnRspUserLogin success')
-
+            self.frontid = data["FrontID"]
+            self.sessionid = data["SessionID"]
             self.login_status = True
             return
             print('ATP开始合约信息查询')
@@ -261,13 +316,35 @@ class AtpTdApi(ATdApi):
             print('Atp onRspQryInvestorPosition failed', error)
             return
         if data:
-            if data['InstrumentID'] in monitor_ary:
-                print('Position=',data['Position'])
-                gp_dict[data['InstrumentID']] = gp_dict.get(data['InstrumentID'], {})
-                gp_dict[data['InstrumentID']]['APosition'] = data['Position']
+            print(f"InstrumentID= {data['InstrumentID']} , Direction= {data['PosiDirection']} , Position= {data['Position']}")
+            if data['InstrumentID'].startswith('GC'):
+                ap_dict[data['InstrumentID']] = ap_dict.get(data['InstrumentID'], {})
+                ap_dict[data['InstrumentID']]['APosition'] = data['Position']
+            if last:
                 isAtpQry = True
         else:
             print("The data dictionary is empty.")
+
+
+    def onRspQryOrder(self, data: dict, error: dict, reqid: int, last: bool)->None:
+        if error["ErrorID"]:
+            print('Atp onRspQryOrder failed', error)
+            return
+        if data:
+            if data['OrderStatus'] != '0' and data['OrderStatus'] != '5':
+                print("Atp rspOrder=",data)
+                atp_req: dict = {
+                    "BrokerID": self.brokerid,
+                    "InvestorID": self.userid,
+                    "UserID": self.userid,
+                    "ActionFlag": "0",
+                    "OrderRef":data['OrderRef'],
+                    "FrontID": self.frontid,
+                    "SessionID": self.sessionid
+                }
+                print('Atp reqOrderAction 撤单, ', atp_req)
+                self.reqid += 1
+                self.reqOrderAction(atp_req, self.reqid) 
 
 
     def onRspQryTradingAccount(self, data: dict, error: dict, reqid: int, last: bool)->None:
@@ -279,31 +356,53 @@ class AtpTdApi(ATdApi):
 
 
 def queryTimer(qTdApi, aTdApi):
-    if qTdApi.login_status and aTdApi.login_status:
-        now = datetime.now()
-        time_string = now.strftime("%Y-%m-%d %H:%M:%S")
-        print('当前查询时间:',time_string)
-        qTdApi.qryInvestorPosition()
-        aTdApi.qryInvestorPosition()
+    ##if qTdApi.login_status and aTdApi.login_status:
+    now = datetime.now()
+    time_string = now.strftime("%Y-%m-%d %H:%M:%S")
+    print('##############################################################')
+    print('当前查询时间:',time_string)
+    qTdApi.qryInvestorPosition()
+    aTdApi.qryInvestorPosition()
 
-    ##时间保持一定的差值，基本能确保统一查询之后，两边都已经返回数据
-    delQryCom = config.get('Time', 'delqrycom')
-    comTimer = threading.Timer(delQryCom, positionCompare)
+    ##时间保持一定的差值(ms),确保统一查询之后，两边都已经返回数据
+    deltime = int(config.get('Time', 'deltime'))
+    comTimer = threading.Timer(deltime, positionCompare,args=(qTdApi, aTdApi))
     comTimer.start()
-    qryTimer = threading.Timer(2*delQryCom, queryTimer, args=(qTdApi, aTdApi))
+    qryTimer = threading.Timer(2*deltime, queryTimer, args=(qTdApi, aTdApi))
     qryTimer.start()
 
 
+def positionCompare(qTdApi, aTdApi):
+    ##if isAtpQry and isQdpQry:
+    print('开始持仓比对')
+    if 'AUP1' not in gp_dict:
+            gp_dict['AUP1'] = {}
+            gp_dict['AUP1']['QPosition'] = 0
+    if 'AUP10' not in gp_dict:
+            gp_dict['AUP10'] = {}
+            gp_dict['AUP10']['QPosition'] = 0
+    if 'AUP100' not in gp_dict:
+        gp_dict['AUP100'] = {}
+        gp_dict['AUP100']['QPosition'] = 0
+    Qpositions = gp_dict['AUP1']['QPosition'] + gp_dict['AUP10']['QPosition']*10 + gp_dict['AUP100']['QPosition']*100
+    Apositions = 0
+    for key in ap_dict.keys():
+        Apositions += ap_dict[key].get("APosition",0)
+    Apositions = Apositions*100
 
-def positionCompare():
-    if isAtpQry and isQdpQry:
-        print('开始持仓比对')
-        for key in gp_dict.keys():
-            if gp_dict[key].get('APosition',0) != gp_dict[key].get('QPosition',0):
-                print(f'合约{key}持仓不一致,ATP持仓:{gp_dict[key].get("APosition",0)},QDP持仓:{gp_dict[key].get("QPosition",0)}')
-                kill_process('zzz')
-        print('持仓比对结束')
+    print(f"QDP持仓= {Qpositions} , ATP持仓= {Apositions}")
+    if abs(Qpositions - Apositions) > 100:
+        print('持仓比对异常，开始杀进程并撤单')
+        kill_process(kill_processName)
+        cancelAllOrders(qTdApi, aTdApi)
+        return
+    print('持仓比对结束')
 
+
+def cancelAllOrders(qTdApi, aTdApi):
+    qTdApi.qryOrder()
+    aTdApi.qryOrder()
+    pass
 
 def kill_process(process_name):
     # 遍历所有进程，查找名称匹配的进程
@@ -317,35 +416,30 @@ def kill_process(process_name):
 if __name__ == '__main__':
 
     config.read('config.ini')
-    processName = config.get('KillProcess', 'name')
-    if not processName and processName == '':
+    kill_processName = config.get('KillProcess', 'name')
+    if not kill_processName and kill_processName == '':
         print('please config the [KillProcess] in config.ini file')
         sys.exit(0)
 
-    mointerStr = config.get('MoniterInstrument', 'instruments')
-    if not mointerStr and mointerStr == '':
-        print('please config the [MoniterInstrument] in config.ini file')
-        sys.exit(0)
-
-    monitor_ary = mointerStr.split(',')
-
+    tagQDP = 'QDP'
     q_TdApi = QdpTdApi()
-    q_userid = config.get('QDP', 'userid')
-    q_password = config.get('QDP', 'password')
-    q_brokerid = config.get('QDP', 'brokerid')
-    q_investorid = config.get('QDP', 'investorid')
-    q_td_address = config.get('QDP', 'tradeaddress')
+    q_userid = config.get(tagQDP, 'userid')
+    q_password = config.get(tagQDP, 'password')
+    q_brokerid = config.get(tagQDP, 'brokerid')
+    q_investorid = config.get(tagQDP, 'investorid')
+    q_td_address = config.get(tagQDP, 'tradeaddress')
     q_TdApi.connect(q_td_address, q_userid, q_password, q_brokerid, q_investorid)
 
+    tagATP = 'TestATP'
     a_TdApi = AtpTdApi()
-    a_investorid = config.get('ATP', 'investorid')
-    a_brokerid= config.get('ATP', 'brokerid')
-    a_password= config.get('ATP', 'password')
-    a_td_address= config.get('ATP', 'tradeaddress')
+    a_investorid = config.get(tagATP, 'investorid')
+    a_brokerid= config.get(tagATP, 'brokerid')
+    a_password= config.get(tagATP, 'password')
+    a_td_address= config.get(tagATP, 'tradeaddress')
     a_TdApi.connect(a_td_address, a_investorid, a_password, a_brokerid)
 
     qryTimer = threading.Timer(2, queryTimer, args=(q_TdApi, a_TdApi))
     qryTimer.start()
 
-    input()
-    sys.exit(0)
+    while True:
+        time.sleep(5)

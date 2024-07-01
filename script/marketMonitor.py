@@ -19,6 +19,8 @@ ap_dict = {}
 
 isQdpQry = False
 isAtpQry = False
+isCancelOrdering = False
+exceptionCount = 0
 kill_processName = ""
 
 config = configparser.ConfigParser()
@@ -113,6 +115,7 @@ class QdpTdApi(QTdApi):
 
     ##查询持仓
     def qryInvestorPosition(self)->None:
+        global isQdpQry
         isQdpQry = False
         gp_dict.clear()
         if self.login_status:
@@ -141,6 +144,7 @@ class QdpTdApi(QTdApi):
     ##查询持仓回调
     def onRspQryInvestorPosition(self, data: dict, error: dict, reqid: int, last: bool)->None:
         print('##QDP onRspQryInvestorPosition##')
+        global isQdpQry
         if error["ErrorID"]:
             isQdpQry = False
             print('QDP onRspQryInvestorPosition failed', error)
@@ -148,7 +152,11 @@ class QdpTdApi(QTdApi):
         if data:
             print(f"InstrumentID= {data['InstrumentID']} , Direction= {data['Direction']} , Position= {data['Position']}")
             gp_dict[data['InstrumentID']] = gp_dict.get(data['InstrumentID'], {})
-            gp_dict[data['InstrumentID']]['QPosition'] = data['Position']
+            gp_dict[data['InstrumentID']]['QPosition'] =  gp_dict[data['InstrumentID']].get('QPosition', 0)
+            if(int(data['Direction']) == 0):
+                gp_dict[data['InstrumentID']]['QPosition'] += int(data['Position'])
+            else:
+                gp_dict[data['InstrumentID']]['QPosition'] -= int(data['Position'])
             if last:
                 isQdpQry = True
         else:
@@ -233,6 +241,7 @@ class AtpTdApi(ATdApi):
         
     ##查询持仓
     def qryInvestorPosition(self)->None:
+        global isAtpQry
         isAtpQry = False
         ap_dict.clear()
         if self.login_status:
@@ -311,6 +320,7 @@ class AtpTdApi(ATdApi):
     def onRspQryInvestorPosition(self, data: dict, error: dict, reqid: int, last: bool)->None:
         ##data对应CThostFtdcInvestorPositionField结构, error对应CThostFtdcRspInfoField
         print('##Atp onRspQryInvestorPosition##')
+        global isAtpQry
         if error["ErrorID"]:
             isAtpQry = False
             print('Atp onRspQryInvestorPosition failed', error)
@@ -319,7 +329,8 @@ class AtpTdApi(ATdApi):
             print(f"InstrumentID= {data['InstrumentID']} , Direction= {data['PosiDirection']} , Position= {data['Position']}")
             if data['InstrumentID'].startswith('GC'):
                 ap_dict[data['InstrumentID']] = ap_dict.get(data['InstrumentID'], {})
-                ap_dict[data['InstrumentID']]['APosition'] = data['Position']
+                ap_dict[data['InstrumentID']]['APosition'] = ap_dict[data['InstrumentID']].get('APosition', 0)
+                ap_dict[data['InstrumentID']]['APosition'] += int(data['Position'])
             if last:
                 isAtpQry = True
         else:
@@ -338,7 +349,8 @@ class AtpTdApi(ATdApi):
                     "InvestorID": self.userid,
                     "UserID": self.userid,
                     "ActionFlag": "0",
-                    "OrderRef":data['OrderRef'],
+                    "ExchangeID": data['ExchangeID'],
+                    "OrderSysID":data['OrderSysID'],
                     "FrontID": self.frontid,
                     "SessionID": self.sessionid
                 }
@@ -356,53 +368,70 @@ class AtpTdApi(ATdApi):
 
 
 def queryTimer(qTdApi, aTdApi):
-    ##if qTdApi.login_status and aTdApi.login_status:
-    now = datetime.now()
-    time_string = now.strftime("%Y-%m-%d %H:%M:%S")
-    print('##############################################################')
-    print('当前查询时间:',time_string)
-    qTdApi.qryInvestorPosition()
-    aTdApi.qryInvestorPosition()
+    global isCancelOrdering
+    if qTdApi.login_status and aTdApi.login_status:
+        if isCancelOrdering:
+            time.sleep(60)
+            isCancelOrdering = False
+        now = datetime.now()
+        time_string = now.strftime("%Y-%m-%d %H:%M:%S")
+        print('##############################################################')
+        print('当前查询时间:',time_string)
+        qTdApi.qryInvestorPosition()
+        aTdApi.qryInvestorPosition()
 
-    ##时间保持一定的差值(ms),确保统一查询之后，两边都已经返回数据
-    deltime = int(config.get('Time', 'deltime'))
-    comTimer = threading.Timer(deltime, positionCompare,args=(qTdApi, aTdApi))
-    comTimer.start()
-    qryTimer = threading.Timer(2*deltime, queryTimer, args=(qTdApi, aTdApi))
-    qryTimer.start()
+        ##时间保持一定的差值(ms),确保统一查询之后，两边都已经返回数据
+        deltime = int(config.get('Time', 'deltime'))
+        comTimer = threading.Timer(deltime, positionCompare,args=(qTdApi, aTdApi))
+        comTimer.start()
+        qryTimer = threading.Timer(2*deltime, queryTimer, args=(qTdApi, aTdApi))
+        qryTimer.start()
 
 
 def positionCompare(qTdApi, aTdApi):
-    ##if isAtpQry and isQdpQry:
-    print('开始持仓比对')
-    if 'AUP1' not in gp_dict:
-            gp_dict['AUP1'] = {}
-            gp_dict['AUP1']['QPosition'] = 0
-    if 'AUP10' not in gp_dict:
-            gp_dict['AUP10'] = {}
-            gp_dict['AUP10']['QPosition'] = 0
-    if 'AUP100' not in gp_dict:
-        gp_dict['AUP100'] = {}
-        gp_dict['AUP100']['QPosition'] = 0
-    Qpositions = gp_dict['AUP1']['QPosition'] + gp_dict['AUP10']['QPosition']*10 + gp_dict['AUP100']['QPosition']*100
-    Apositions = 0
-    for key in ap_dict.keys():
-        Apositions += ap_dict[key].get("APosition",0)
-    Apositions = Apositions*100
+    global isQdpQry
+    global isAtpQry
+    global isCancelOrdering
+    global exceptionCount
+    if isAtpQry and isQdpQry:
+        print('开始持仓比对')
+        if 'AUP1' not in gp_dict:
+                gp_dict['AUP1'] = {}
+                gp_dict['AUP1']['QPosition'] = 0
+        if 'AUP10' not in gp_dict:
+                gp_dict['AUP10'] = {}
+                gp_dict['AUP10']['QPosition'] = 0
+        if 'AUP100' not in gp_dict:
+            gp_dict['AUP100'] = {}
+            gp_dict['AUP100']['QPosition'] = 0
+        Qpositions = gp_dict['AUP1']['QPosition'] + gp_dict['AUP10']['QPosition']*10 + gp_dict['AUP100']['QPosition']*100
+        Apositions = 0
+        for key in ap_dict.keys():
+            Apositions += ap_dict[key].get("APosition",0)
+        Apositions = Apositions*100
 
-    print(f"QDP持仓= {Qpositions} , ATP持仓= {Apositions}")
-    if abs(Qpositions - Apositions) > 100:
-        print('持仓比对异常，开始杀进程并撤单')
-        kill_process(kill_processName)
-        cancelAllOrders(qTdApi, aTdApi)
-        return
-    print('持仓比对结束')
+        print(f"QDP总持仓(盎司)= {Qpositions} , ATP总持仓(盎司)= {Apositions}")
+        if abs(Qpositions + Apositions) > 100:
+            print('单次持仓比对异常')
+            exceptionCount +=1
+            if exceptionCount >= 3:
+                print('连续异常次数3次 , 执行杀死进程并撤单操作')
+                #isCancelOrdering = True
+                #kill_process(kill_processName)
+                #print('杀死进程:',kill_processName)
+                #time.sleep(1)
+                #print('开始查询订单并撤单')
+                #cancelAllOrders(qTdApi, aTdApi)
+            return
+        else:
+            exceptionCount = 0
+        print('持仓比对结束')
 
 
 def cancelAllOrders(qTdApi, aTdApi):
     qTdApi.qryOrder()
     aTdApi.qryOrder()
-    pass
+
 
 def kill_process(process_name):
     # 遍历所有进程，查找名称匹配的进程
@@ -415,6 +444,7 @@ def kill_process(process_name):
 
 if __name__ == '__main__':
 
+    print('start marketMonitor')
     config.read('config.ini')
     kill_processName = config.get('KillProcess', 'name')
     if not kill_processName and kill_processName == '':
@@ -430,7 +460,7 @@ if __name__ == '__main__':
     q_td_address = config.get(tagQDP, 'tradeaddress')
     q_TdApi.connect(q_td_address, q_userid, q_password, q_brokerid, q_investorid)
 
-    tagATP = 'TestATP'
+    tagATP = 'ATP'
     a_TdApi = AtpTdApi()
     a_investorid = config.get(tagATP, 'investorid')
     a_brokerid= config.get(tagATP, 'brokerid')
@@ -438,8 +468,12 @@ if __name__ == '__main__':
     a_td_address= config.get(tagATP, 'tradeaddress')
     a_TdApi.connect(a_td_address, a_investorid, a_password, a_brokerid)
 
-    qryTimer = threading.Timer(2, queryTimer, args=(q_TdApi, a_TdApi))
-    qryTimer.start()
+    while True:
+        if q_TdApi.login_status and a_TdApi.login_status:
+            ##此处接口要预热10s
+            qryTimer = threading.Timer(10, queryTimer, args=(q_TdApi, a_TdApi))
+            qryTimer.start()
+            break
 
     while True:
         time.sleep(5)

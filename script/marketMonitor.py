@@ -412,16 +412,17 @@ def positionCompare(qTdApi, aTdApi):
 
         print(f"QDP总持仓(盎司)= {Qpositions} , ATP总持仓(盎司)= {Apositions}")
         if abs(Qpositions + Apositions) > 100:
-            print('单次持仓比对异常')
+            print('持仓比对异常')
             exceptionCount +=1
             if exceptionCount >= 3:
-                print('连续异常次数3次 , 执行杀死进程并撤单操作')
-                #isCancelOrdering = True
-                #kill_process(kill_processName)
-                #print('杀死进程:',kill_processName)
-                #time.sleep(1)
-                #print('开始查询订单并撤单')
-                #cancelAllOrders(qTdApi, aTdApi)
+                print('连续异常次数>=3次 , 执行杀死进程并撤单操作')
+                isCancelOrdering = True
+                kill_process(kill_processName)
+                print('杀死进程:',kill_processName)
+                time.sleep(1)
+                print('开始查询订单并撤单')
+                cancelAllOrders(qTdApi, aTdApi)
+                exceptionCount = 0
             return
         else:
             exceptionCount = 0

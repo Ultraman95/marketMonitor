@@ -42,14 +42,6 @@ class QdpTdApi(QTdApi):
         self.brokerid = ""
         self.investorid = ""
 
-        self.frontid = 0
-        self.sessionid = 0
-
-        self.order_data = []
-        self.trade_data = []
-        self.positions = {}
-        self.sysid_orderid_map = {}
-
     def onFrontConnected(self):
         """
         Callback when front server is connected.
@@ -160,7 +152,7 @@ class QdpTdApi(QTdApi):
             if last:
                 isQdpQry = True
         else:
-            print("The data dictionary is empty.")
+            print("QDP onRspQryInvestorPosition , The data dictionary is empty.")
 
 
     def onRspQryOrder(self, data: dict, error: dict, reqid: int, last: bool)->None:
@@ -334,7 +326,7 @@ class AtpTdApi(ATdApi):
             if last:
                 isAtpQry = True
         else:
-            print("The data dictionary is empty.")
+            print("Atp onRspQryInvestorPosition , The data dictionary is empty.")
 
 
     def onRspQryOrder(self, data: dict, error: dict, reqid: int, last: bool)->None:
